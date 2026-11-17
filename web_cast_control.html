@@ -1,0 +1,429 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WebCast Remote Play</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- We now use PeerJS for highly reliable, cross-platform WebRTC connections without database limits -->
+    <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+    <style>
+        body { font-family: 'Inter', sans-serif; background-color: #0f172a; color: #f8fafc; }
+        .hidden { display: none !important; }
+    </style>
+</head>
+<body class="min-h-screen flex flex-col">
+
+    <!-- Header -->
+    <header class="bg-slate-900 border-b border-slate-800 p-4 text-center shadow-lg">
+        <h1 class="text-2xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-blue-400 to-indigo-500">
+            WebCast Remote Play
+        </h1>
+        <p class="text-slate-400 text-sm mt-1">Direct Peer-to-Peer Streaming (No Database Required)</p>
+    </header>
+
+    <!-- Main Content Container -->
+    <main class="flex-grow p-4 flex flex-col items-center justify-center relative">
+        
+        <!-- Step 1: Role Selection -->
+        <div id="roleSelection" class="max-w-md w-full bg-slate-800 rounded-xl shadow-2xl p-6 border border-slate-700 transition-all">
+            <h2 class="text-xl font-semibold mb-4 text-center">Select Device Role</h2>
+            <div class="space-y-4">
+                <button onclick="startChromebookRole()" class="w-full py-4 bg-indigo-600 hover:bg-indigo-500 rounded-lg font-medium transition flex flex-col items-center gap-2">
+                    <span class="text-lg">💻 I am the Chromebook</span>
+                    <span class="text-xs text-indigo-200">(Viewer & Controller)</span>
+                </button>
+                <button onclick="startPhoneRole()" class="w-full py-4 bg-teal-600 hover:bg-teal-500 rounded-lg font-medium transition flex flex-col items-center gap-2">
+                    <span class="text-lg">📱 I am the Phone</span>
+                    <span class="text-xs text-teal-200">(Screen Sharer & Game Host)</span>
+                </button>
+            </div>
+            
+            <!-- Export Options -->
+            <div class="mt-6 text-center border-t border-slate-700 pt-4">
+                <button onclick="downloadHtml()" class="w-full py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-sm text-slate-200 transition flex items-center justify-center gap-2 shadow mb-2">
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path></svg>
+                    Download App (.html file)
+                </button>
+                <p class="text-xs text-slate-400 mt-2">Google Sites blocks screen sharing. Download this file and host it on <b>tiiny.host</b> or GitHub Pages to bypass iframe blocks!</p>
+            </div>
+        </div>
+
+        <!-- Chromebook View (Receiver) -->
+        <div id="chromebookView" class="hidden w-full max-w-4xl flex-col items-center gap-6">
+            
+            <div id="cb-connection-panel" class="w-full max-w-md bg-slate-800 rounded-xl p-6 border border-slate-700 text-center shadow-lg">
+                <h3 class="text-lg font-semibold mb-2">Step 1: Your Room Code</h3>
+                <p class="text-sm text-slate-400 mb-6">Enter this code on your phone to connect instantly.</p>
+                <button id="btnCreateRoom" onclick="createRoom()" class="w-full py-4 bg-blue-600 hover:bg-blue-500 rounded-lg font-medium transition mb-4 shadow-lg shadow-blue-900/50">
+                    Generate Room Code
+                </button>
+
+                <div id="roomCodeDisplay" class="hidden text-6xl font-mono font-bold text-blue-400 tracking-widest mb-2 mt-4 bg-slate-900 py-4 rounded-lg border border-slate-700"></div>
+                
+                <div id="qrCodeContainer" class="hidden flex-col items-center mt-4 bg-slate-900 p-4 rounded-lg border border-slate-700">
+                    <p class="text-sm font-medium text-slate-300 mb-2">How to open on your phone:</p>
+                    <p class="text-xs text-slate-400 mb-4 text-left">
+                        <strong>Easiest way:</strong> Go to this exact site on your phone and tap "I am the Phone".<br><br>
+                        <strong>Or use QR:</strong> Paste the website link below to generate a quick scan code:
+                    </p>
+                    <input type="text" id="qrUrlInput" placeholder="Paste full URL here..." class="w-full bg-slate-800 border border-slate-600 rounded p-2 text-sm text-white mb-3" oninput="updateQRCode()">
+                    <img id="qrCodeImage" src="" alt="QR Code" class="w-32 h-32 rounded-lg border-2 border-slate-600 shadow-md hidden bg-white">
+                </div>
+
+                <p id="cbStatusText" class="text-sm text-slate-400 hidden mt-4 font-medium"></p>
+            </div>
+
+            <!-- Streaming Player -->
+            <div id="streamContainer" class="hidden w-full flex flex-col items-center">
+                <div class="relative w-full max-w-4xl aspect-video bg-black rounded-xl overflow-hidden shadow-2xl border-2 border-indigo-500 ring-4 ring-indigo-500/20">
+                    <video id="remoteVideo" autoplay playsinline class="w-full h-full object-contain"></video>
+                    
+                    <!-- Overlay for Controls -->
+                    <div id="keyboardOverlay" class="absolute inset-0 flex items-center justify-center bg-black/60 opacity-0 hover:opacity-100 transition-opacity">
+                        <div class="text-center">
+                            <p class="text-2xl font-bold text-white mb-2">Stream Active</p>
+                            <p class="text-slate-300">Viewing phone screen. (Keyboard fallback active)</p>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- Status & Fullscreen Controls -->
+                <div class="mt-4 flex w-full max-w-4xl justify-between items-center text-sm text-slate-400 px-2">
+                    <div class="flex gap-4">
+                        <span class="flex items-center gap-1"><div class="w-2 h-2 rounded-full bg-green-500 animate-pulse"></div> Connected</span>
+                        <span class="flex items-center gap-1"><div class="w-2 h-2 rounded-full bg-blue-500"></div> Keyboard Active</span>
+                    </div>
+                    <button onclick="document.getElementById('remoteVideo').requestFullscreen().catch(err => console.warn(err))" class="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded transition shadow font-medium flex items-center gap-2">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4"></path></svg>
+                        Fullscreen
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Phone View (Sender) -->
+        <div id="phoneView" class="hidden w-full max-w-md flex-col items-center gap-6">
+            
+            <div id="phone-connection-panel" class="w-full bg-slate-800 rounded-xl p-6 border border-slate-700 shadow-lg">
+                <h3 class="text-lg font-semibold mb-2">Step 1: Enter Room Code</h3>
+                <p class="text-sm text-slate-400 mb-4">Type the 5-digit code displayed on your Chromebook.</p>
+                
+                <input type="text" id="roomCodeInput" placeholder="e.g. 12345" maxlength="5" class="w-full h-16 bg-slate-900 border border-slate-700 rounded-lg p-2 text-center text-4xl font-mono text-white mb-4 focus:outline-none focus:border-teal-500 tracking-widest shadow-inner">
+                
+                <label class="flex items-start gap-3 mb-6 p-3 bg-slate-900 rounded border border-slate-700 cursor-pointer hover:bg-slate-800 transition">
+                    <input type="checkbox" id="forceFullScreen" checked class="mt-1 w-5 h-5 accent-teal-500">
+                    <div class="text-sm">
+                        <span class="font-semibold text-teal-300 block">Share Entire Phone Screen</span>
+                        <span class="text-slate-400 text-xs">Uncheck to stream just the demo game. (Full screen requires opening this page in a new Safari/Chrome tab, not inside Gemini).</span>
+                    </div>
+                </label>
+
+                <button id="btnJoinRoom" onclick="joinRoom()" class="w-full py-4 bg-teal-600 hover:bg-teal-500 rounded-lg text-lg font-medium transition shadow-lg shadow-teal-900/50 flex flex-col items-center">
+                    <span>Connect & Share Screen</span>
+                </button>
+
+                <p id="phoneStatusText" class="text-sm text-center text-yellow-400 mt-4 hidden font-medium"></p>
+            </div>
+
+            <!-- Mini Game Demo for Phone -->
+            <div id="miniGameContainer" class="hidden w-full flex-col items-center">
+                <p class="text-sm text-teal-300 mb-2 font-medium">Demo Game (Connect Bluetooth Controller!)</p>
+                <canvas id="gameCanvas" width="300" height="300" class="bg-slate-900 rounded-lg border-2 border-slate-700 shadow-xl"></canvas>
+                <p id="gamepadStatus" class="mt-2 text-xs text-yellow-400 font-mono">🎮 Waiting for Gamepad (Press a button)...</p>
+                <p id="lastCommandText" class="mt-1 text-xs text-slate-500 font-mono">Awaiting remote keyboard commands...</p>
+            </div>
+        </div>
+    </main>
+
+    <script>
+        // --- WebRTC Logic using PeerJS (No Database required!) ---
+        let peer = null;
+        let dataConnection = null;
+        let localStream = null;
+
+        const ui = {
+            roleSelection: document.getElementById('roleSelection'),
+            chromebookView: document.getElementById('chromebookView'),
+            phoneView: document.getElementById('phoneView'),
+            cbConnectionPanel: document.getElementById('cb-connection-panel'),
+            streamContainer: document.getElementById('streamContainer'),
+            remoteVideo: document.getElementById('remoteVideo'),
+            phoneConnectionPanel: document.getElementById('phone-connection-panel'),
+            miniGameContainer: document.getElementById('miniGameContainer')
+        };
+
+        window.downloadHtml = function() {
+            // Clones the entire current document, removes injected injected scripts, and saves it
+            const htmlContent = "<!DOCTYPE html>\n" + document.documentElement.outerHTML;
+            const blob = new Blob([htmlContent], {type: 'text/html'});
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'ScreenStreamer.html';
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+        };
+
+        window.updateQRCode = function() {
+            const input = document.getElementById('qrUrlInput').value;
+            const img = document.getElementById('qrCodeImage');
+            if(input && input.trim() !== '') {
+                img.src = `https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=${encodeURIComponent(input.trim())}`;
+                img.classList.remove('hidden');
+            } else {
+                img.classList.add('hidden');
+            }
+        };
+
+        window.startChromebookRole = function() {
+            ui.roleSelection.classList.add('hidden');
+            ui.chromebookView.classList.remove('hidden');
+            ui.chromebookView.classList.add('flex');
+            setupKeyboardCapture();
+        };
+
+        window.startPhoneRole = function() {
+            ui.roleSelection.classList.add('hidden');
+            ui.phoneView.classList.remove('hidden');
+            ui.phoneView.classList.add('flex');
+        };
+
+        // --- Create Room (Chromebook) ---
+        window.createRoom = function() {
+            const btn = document.getElementById('btnCreateRoom');
+            btn.innerText = "Setting up secure room...";
+            btn.disabled = true;
+
+            const status = document.getElementById('cbStatusText');
+            status.classList.remove('hidden');
+            status.innerText = "Connecting to signaling server...";
+
+            // Generate random 5-digit code and create a specific Peer ID
+            const roomCode = Math.floor(10000 + Math.random() * 90000).toString();
+            const peerId = 'webcast-play-' + roomCode;
+
+            peer = new Peer(peerId, { debug: 2 });
+
+            peer.on('open', (id) => {
+                btn.classList.add('hidden');
+                
+                const display = document.getElementById('roomCodeDisplay');
+                display.innerText = roomCode;
+                display.classList.remove('hidden');
+
+                const qrContainer = document.getElementById('qrCodeContainer');
+                qrContainer.classList.remove('hidden');
+                qrContainer.classList.add('flex');
+
+                status.innerText = "Room created. Enter this code on your phone.";
+                status.classList.replace('text-red-400', 'text-slate-400');
+            });
+
+            // Handle incoming data connection (Keyboard Inputs)
+            peer.on('connection', (conn) => {
+                dataConnection = conn;
+                status.innerText = "Phone connected! Waiting for video stream...";
+                
+                conn.on('open', () => {
+                    console.log("Data connection established!");
+                });
+            });
+
+            // Handle incoming media connection (Screen Share)
+            peer.on('call', (call) => {
+                call.answer(); // Auto-answer the call
+                
+                call.on('stream', (remoteStream) => {
+                    ui.remoteVideo.srcObject = remoteStream;
+                    ui.cbConnectionPanel.classList.add('hidden');
+                    ui.streamContainer.classList.remove('hidden');
+                    ui.streamContainer.classList.add('flex');
+                    window.focus(); // Focus to capture keyboard
+                });
+            });
+
+            peer.on('error', (err) => {
+                console.error("PeerJS Error:", err);
+                status.innerText = "Network Error: " + err.type + ". Try generating again.";
+                status.classList.replace('text-slate-400', 'text-red-400');
+                btn.disabled = false;
+                btn.innerText = "Generate Room Code";
+            });
+        };
+
+        // --- Join Room (Phone) ---
+        window.joinRoom = async function() {
+            const input = document.getElementById('roomCodeInput');
+            const roomCode = input.value.trim();
+            const status = document.getElementById('phoneStatusText');
+            const forceFullScreen = document.getElementById('forceFullScreen').checked;
+            
+            if(roomCode.length !== 5) {
+                status.innerText = "Please enter exactly 5 digits.";
+                status.classList.remove('hidden');
+                return;
+            }
+
+            const btn = document.getElementById('btnJoinRoom');
+            btn.disabled = true;
+            status.classList.remove('hidden');
+            status.innerText = "Requesting Video Access...";
+
+            // Show the game early so we can capture the canvas if full-screen sharing fails
+            ui.miniGameContainer.classList.remove('hidden');
+            ui.miniGameContainer.classList.add('flex');
+            initGame();
+
+            try {
+                // Step 1: Get the video stream
+                if (navigator.mediaDevices && navigator.mediaDevices.getDisplayMedia) {
+                    localStream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
+                } else {
+                    throw new Error("getDisplayMedia not supported");
+                }
+            } catch (mediaErr) {
+                if (forceFullScreen) {
+                    status.innerHTML = "<span class='text-red-400'>❌ Screen share blocked!</span><br><span class='text-slate-300 text-xs mt-2 block'>You MUST tap 'Open in New Tab' to open this in Safari natively, or uncheck the box above to just stream the demo game.</span>";
+                    btn.disabled = false;
+                    return;
+                } else {
+                    console.warn("Screen share unavailable, falling back to canvas stream");
+                    status.innerText = "Screen share blocked. Streaming game canvas instead...";
+                    const canvas = document.getElementById('gameCanvas');
+                    localStream = canvas.captureStream(30); 
+                }
+            }
+
+            status.innerText = "Connecting to network...";
+
+            // Step 2: Initialize PeerJS to connect
+            peer = new Peer({ debug: 2 });
+
+            peer.on('open', (id) => {
+                const targetId = 'webcast-play-' + roomCode;
+                status.innerText = "Connecting to Chromebook...";
+
+                // Connect for data (Keyboard)
+                dataConnection = peer.connect(targetId);
+                dataConnection.on('open', () => {
+                    console.log("Data connection to Chromebook open");
+                });
+
+                // Receive keys from Chromebook
+                dataConnection.on('data', (data) => {
+                    if(data.type === 'key') handleRemoteKey(data.key, data.action);
+                });
+
+                // Connect for media (Screen)
+                const call = peer.call(targetId, localStream);
+                
+                ui.phoneConnectionPanel.innerHTML = `
+                    <div class="text-center py-6">
+                        <h3 class="text-3xl font-bold text-teal-400 mb-2">Connected! ✓</h3>
+                        <p class="text-slate-300 text-sm mb-4">Streaming screen to Chromebook.</p>
+                        <p class="text-slate-500 text-xs">Leave this window open in the background to keep streaming.</p>
+                    </div>`;
+            });
+
+            peer.on('error', (err) => {
+                console.error("PeerJS Error:", err);
+                status.innerHTML = `<span class='text-red-400'>Connection failed: ${err.type}</span>`;
+                btn.disabled = false;
+            });
+        };
+
+        // --- Keyboard Capture (Chromebook Side) ---
+        function setupKeyboardCapture() {
+            window.addEventListener('keydown', (e) => {
+                if(["ArrowUp","ArrowDown","ArrowLeft","ArrowRight"," ","w","a","s","d"].includes(e.key)){
+                    e.preventDefault();
+                }
+                if(dataConnection && dataConnection.open) {
+                    dataConnection.send({ type: 'key', action: 'down', key: e.key });
+                }
+            }, { passive: false });
+
+            window.addEventListener('keyup', (e) => {
+                if(dataConnection && dataConnection.open) {
+                    dataConnection.send({ type: 'key', action: 'up', key: e.key });
+                }
+            });
+        }
+
+        // --- Mini Game Logic (Phone Side) ---
+        let gameActive = false;
+        let player = { x: 135, y: 135, size: 30, speed: 5, color: '#10b981' };
+        let keys = {};
+
+        function handleRemoteKey(key, action) {
+            const mappedKey = key.toLowerCase();
+            if (action === 'down') keys[mappedKey] = true;
+            if (action === 'up') keys[mappedKey] = false;
+            const logText = document.getElementById('lastCommandText');
+            if(logText) logText.innerText = `Received: ${key} (${action})`;
+        }
+
+        function initGame() {
+            if(gameActive) return;
+            gameActive = true;
+            const canvas = document.getElementById('gameCanvas');
+            const ctx = canvas.getContext('2d');
+
+            function gameLoop() {
+                // Gamepad Polling (Works locally on the phone)
+                const gamepads = navigator.getGamepads ? navigator.getGamepads() : [];
+                let gp = null;
+                for (let i = 0; i < gamepads.length; i++) {
+                    if (gamepads[i]) { gp = gamepads[i]; break; }
+                }
+
+                if (gp) {
+                    const statusEl = document.getElementById('gamepadStatus');
+                    if (statusEl.innerText.includes('Waiting')) {
+                        statusEl.innerText = `🎮 Connected: ${gp.id.substring(0, 15)}...`;
+                        statusEl.className = "mt-2 text-xs text-green-400 font-mono";
+                    }
+                    
+                    const deadzone = 0.2;
+                    if (Math.abs(gp.axes[0]) > deadzone) player.x = Math.max(0, Math.min(canvas.width - player.size, player.x + gp.axes[0] * player.speed));
+                    if (Math.abs(gp.axes[1]) > deadzone) player.y = Math.max(0, Math.min(canvas.height - player.size, player.y + gp.axes[1] * player.speed));
+
+                    if (gp.buttons[12]?.pressed) player.y = Math.max(0, player.y - player.speed); // Up
+                    if (gp.buttons[13]?.pressed) player.y = Math.min(canvas.height - player.size, player.y + player.speed); // Down
+                    if (gp.buttons[14]?.pressed) player.x = Math.max(0, player.x - player.speed); // Left
+                    if (gp.buttons[15]?.pressed) player.x = Math.min(canvas.width - player.size, player.x + player.speed); // Right
+                }
+
+                // Update (Keyboard fallback from Chromebook)
+                if (keys['arrowup'] || keys['w']) player.y = Math.max(0, player.y - player.speed);
+                if (keys['arrowdown'] || keys['s']) player.y = Math.min(canvas.height - player.size, player.y + player.speed);
+                if (keys['arrowleft'] || keys['a']) player.x = Math.max(0, player.x - player.speed);
+                if (keys['arrowright'] || keys['d']) player.x = Math.min(canvas.width - player.size, player.x + player.speed);
+
+                // Draw
+                ctx.fillStyle = '#0f172a';
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+                
+                ctx.strokeStyle = '#1e293b';
+                ctx.lineWidth = 1;
+                for(let i=0; i<300; i+=30) {
+                    ctx.beginPath(); ctx.moveTo(i, 0); ctx.lineTo(i, 300); ctx.stroke();
+                    ctx.beginPath(); ctx.moveTo(0, i); ctx.lineTo(300, i); ctx.stroke();
+                }
+
+                ctx.fillStyle = player.color;
+                ctx.shadowColor = player.color;
+                ctx.shadowBlur = 15;
+                ctx.fillRect(player.x, player.y, player.size, player.size);
+                ctx.shadowBlur = 0;
+
+                requestAnimationFrame(gameLoop);
+            }
+            gameLoop();
+        }
+    </script>
+</body>
+</html>
